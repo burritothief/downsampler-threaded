@@ -464,7 +464,6 @@ for index in "${!absolute_flac_names[@]}" ;do
 			target_sample_rates[$index]=""
 			target_rate_cmd[$index]=""
 			target_folders[$index]="${absolute_flac_dirs[$index]}/unresampled-16bit"
-			#target_flacs[$index]="${target_folders[$index]}/${flac_filenames[$index]}" ;
 		}
 	fi
 
@@ -482,7 +481,6 @@ for index in "${!absolute_flac_names[@]}" ;do
 
 			target_bit_depths[$index]="24"
 			target_rate_cmd[$index]="${sox_rate[0]} ${target_sample_rates[$index]}"
-			#target_flacs[$index]="${target_folders[$index]}/${flac_filenames[$index]}"
 
 		# 24/88 and 24/96 --> 16/44 and 16/48
 		elif [[ ${flac_sample_rates[$index]} -eq "88200" || ${flac_sample_rates[$index]} -eq "96000" ]] ;then
@@ -497,7 +495,6 @@ for index in "${!absolute_flac_names[@]}" ;do
 
 			target_bit_depths[$index]="16"
 		    target_rate_cmd[$index]="${sox_rate[0]} ${target_sample_rates[$index]}"
-			#target_flacs[$index]="${target_folders[$index]}/${flac_filenames[$index]}"
 		fi
 
 	else
@@ -515,14 +512,13 @@ for index in "${!absolute_flac_names[@]}" ;do
 
 			target_bit_depths[$index]="16"
 			target_rate_cmd[$index]="${sox_rate[0]} ${target_sample_rates[$index]}"
-			#target_flacs[$index]="${target_folders[$index]}/${flac_filenames[$index]}"
 		fi
 	fi
 
-	# don't set target_flacs[$index] unless this index has already matched one of the rules above
-	if [[ -n ${target_folders[$index]} ]] ;then                    # need to unset this var first? just overwriting it does the trick, no?
+	# don't set target_flacs[$index] unless the flac at this index has already matched one of the rules above
+	if [[ -n ${target_folders[$index]} ]] ;then
 		[[ -n $custom_outdir && $custom_outdir != "defaults" ]] && target_folders[$index]="${absolute_flac_dirs[$index]}/${custom_outdir[0]}"
-		target_flacs[$index]="${target_folders[$index]}/${flac_filenames[$index]}" # should really have noticed 4 identical lines up in this before now!
+		target_flacs[$index]="${target_folders[$index]}/${flac_filenames[$index]}"
 	fi
 done
 
