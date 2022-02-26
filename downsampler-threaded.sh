@@ -132,7 +132,7 @@ ${bold}SoX:${default}
 EOF
 }
 
-version="0.9.0" # first gitlab-posted version, previously known as 04.92, with custom outdir changes added
+version="0.9.1"
 
 # colourful printf       # tput is not always present
     red=$'\033[0;31m'    # "$( tput setaf 1 )"
