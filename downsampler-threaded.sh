@@ -20,15 +20,20 @@ sox_rate="rate -v -L"              # Set any valid rate effect command for SoX h
 # FLAC Padding - set to "0" to disable adding padding to output files - NB: without padding tag edits require completely rewriting the entire flac file
 flac_padding="4096"                # length in bytes of the padding block added by metaflac to converted files (+4 more bytes for padding block header)
 
-# Homebrew binaries folder on MacOS - in most cases only needed for Automator users, unless the correct path is not in your shell's $PATH by default
-homebrew_bin="/usr/local/bin"      # set the location of your Homebrew binaries
+# Automator users on MacOS may have issues where depedencies installed via Homebrew, like sox, are not discoverable by default in the environment which Automator runs the script.
+# The location for Homebrew binaries currently defaults to a "bin" folder found in either /usr/local (Intel Macs), or /opt/homebrew (Apple Silicon Macs). With Homebrew installed you
+# should be able to test if either of these is the case by running "brew --prefix" in Terminal, to print the location applicable on your system. If either default value is returned,
+# leave homebrew_bin empty/unset below (or use the -W option if you want to keep a non-standard default set here), and your Homebrew programs should be successfully detected. If you
+# want to use Homebrew programs in a non-standard prefix (which is not recommended by the Homebrew project for normal users), you can set homebrew_bin below with the path to the
+# applicable "bin" folder, or provide the folder as the argument to the -w option.
+homebrew_bin=""                    # leave empty/unset to check both default Homebrew prefix locations
 
 # env_parallel and env_parallel.bash overrides - specify absolute path(s) here if either file is not detected
 env_parallel_command="env_parallel"    # default: "env_parallel"       --- both       must    detected    use          threads
 env_parallel_bash="env_parallel.bash"  # default: "env_parallel.bash"  ---      files      be          to     multiple
 
 # custom output directory name
-custom_outdir="defaults"            # use "defaults" for script defaults, or set name to use for all output folders
+custom_outdir="defaults"           # use "defaults" for script defaults, or set name to use for all output folders
 
 # Script Features - setting the value for options below to "1" enables them, any other text (or lack thereof) between the double-quotes disables
 threads_off="0"                    # use single threaded mode
@@ -95,8 +100,8 @@ ${bold}Script:${default}
 -u, --recurse                     Find/use as potential sources, all flac files at any tree depth under any directories provided as command line arguments.
 -U, --no-recurse                  Only flac files found in the specific directories provided as arguments, and their immediate subdirectories, are used.
 
--w "ARG", --homebrew-bin "ARG"    Set the location of your Homebrew binaries, eg: "/opt/homebrew" for MacOS on ARM.
--W, --default-homebrew            Use the default Homebrew binary location (for *Intel* Macs), "/usr/local/bin".
+-w "ARG", --homebrew-bin "ARG"    Set the location of your Homebrew binaries for non-default Homebrew prefixes, eg: "/Users/you/homebrew/bin"
+-W, --default-homebrew            Check for Homebrew binaries in the default locations for both Intel and Apple Silicon Macs (script's default)
 
 -z, --custom-outdir "ARG"         Set name for all output folders to "ARG".
 -Z, --default-outdir              Use the default target-rate-based output folder naming.
@@ -297,7 +302,7 @@ while true ;do
 			shift 2
 			;;
 		-W|--default-homebrew)
-			homebrew_bin="/usr/local/bin"
+			homebrew_bin=""
 			shift
 			;;
 		-z|--custom-outdir)
@@ -347,7 +352,20 @@ fi
 trap "exit 1" INT
 
 # dependencies
-[[ $PATH != *"$homebrew_bin"* ]] && PATH=$PATH:"$homebrew_bin" # Automator defaults to ignoring Homebrew
+# Automator defaults to ignoring Homebrew (its PATH does not include /usr/local/bin or /opt/*/bin)
+if [[ -z "$homebrew_bin" ]] ;then
+	if [[ -x /usr/local/bin/brew ]] ;then
+		homebrew_bin="/usr/local/bin"
+	elif [[ -x /opt/homebrew/bin/brew ]] ;then
+		homebrew_bin="/opt/homebrew/bin"
+	fi
+else
+	[[ -x "$homebrew_bin"/brew ]] || {
+		printf >&2 '%sERROR%s: "homebrew_bin" was set but "brew" command was not found in set location.\n       Try using -W to check both default locations, or provide the correct non-standard path as the argument to -w.\n       See comments above the "homebrew_bin" option at the top of the script for more details.\n\n' "$red" "$default"
+		exit 1
+	}
+fi
+[[ -n "$homebrew_bin" && $PATH != *"$homebrew_bin"* ]] && PATH=$PATH:"$homebrew_bin" # drop any potential user-supplied trailing slashes from *"$homebrew_bin"* here?
 command -v basename >/dev/null 2>&1 || { _error "'basename' not found, aborting." ;exit 1 ; }
 command -v dirname  >/dev/null 2>&1 || { _error "'dirname' not found, aborting."  ;exit 1 ; }
 command -v sox      >/dev/null 2>&1 || { _error "'sox' not found, aborting."      ;exit 1 ; }
