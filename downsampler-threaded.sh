@@ -41,6 +41,8 @@ threads_off="0"                    # use single threaded mode
 recurse_all_subdirs="1"            # find/use as potential sources, all flac files at any tree depth under any directories provided as command line arguments
                                    # when disabled only flac files found in the specific directories provided as arguments, and their immediate subdirectories, are used
 
+embed_artwork="1"                  # embed in target flac(s), any embedded artwork found in corresponding source flac(s)
+
 use_24_44_and_24_48_input="1"      # output 16/44 and 16/48 from 24/44 and 24/48 sources
 use_24_88_and_24_96_output="0"     # output 24/88.2 and 24/96 from 24/176.4 and 24/192 sources
 
@@ -60,7 +62,6 @@ verbose_output="1"                 # print per-file conversion details to stdout
 # TO DO #
 # -remove dependency on env_parallel
 # -delete sources on success (??)
-# -preserve embedded artwork
 # -add '--' to 'sox --i -b "$arg"' etc, and anywhere else it is still needed (running an argument-taking command with a filename var)
 # fix potential race condition when using 24-bit outputs (on subsequent runs former targets can become sources /and/ targets)
 
@@ -108,6 +109,9 @@ ${bold}Script:${default}
 
 
 ${bold}metaflac:${default}
+-a, --artwork                     Embed in target flac(s), any artwork embedded in source flac(s)
+-A, --no-artwork                  Do not embed in target flac(s), any artwork embedded in source flac(s)
+
 -c, --command-tag                 Tag output with the SoX command (not including file paths/names) used to convert the file.
 -C, --no-command-tag              Do not tag output with the SoX command used to convert the file.
 
@@ -163,9 +167,17 @@ _st_or_quit() { unset quitnow # "local quitnow" instead? same difference?
 
 _message -n
 
-# runtime options -- letters left: aA gG jJ kK lL qQ xX yY
+# runtime options -- letters left: gG jJ kK lL qQ xX yY
 while true ;do
 	case "$1" in
+		-a|--artwork)
+			embed_artwork="1"
+			shift
+			;;
+		-A|--no-artwork)
+			embed_artwork="0"
+			shift
+			;;
 		-b|--progress-bar)
 			use_progress_bar="1"
 			shift
@@ -371,7 +383,7 @@ command -v dirname  >/dev/null 2>&1 || { _error "'dirname' not found, aborting."
 command -v sox      >/dev/null 2>&1 || { _error "'sox' not found, aborting."      ;exit 1 ; }
 
 # recommends
-if [[ $flac_padding != "0" || $use_SOURCE_SPECS_tag == "1" || $use_SOX_COMMAND_tag == "1" || $use_SOURCE_FFP_tag == "1" ]] ;then
+if [[ $flac_padding != "0" || $use_SOURCE_SPECS_tag == "1" || $use_SOX_COMMAND_tag == "1" || $use_SOURCE_FFP_tag == "1" || $embed_artwork == "1" ]] ;then
 	command -v metaflac >/dev/null 2>&1 || { _error "'metaflac' not found, aborting." ;exit 1 ; }
 	metaflac_enabled="1"
 fi
@@ -576,6 +588,19 @@ _execute() {
 				fi
 			}
 
+			[[ $embed_artwork == "1" ]] && {
+				local artwork="${target_flacs[$index]}.metaflac.img"
+				metaflac --export-picture-to="$artwork" -- "${absolute_flac_names[$index]}" >/dev/null 2>&1 && # export failure is the best(? good even?) test for artwork existence? so far...
+					if outerr="$( metaflac --import-picture-from="$artwork" -- "${target_flacs[$index]}" 2>&1 )" ;then
+						rm -- "$artwork"
+					else
+						_metaflac_failure 'embedded artwork'
+						metaflac_failures[$index]="1"
+						imperfect_indexes[$index]="1"
+						return 1
+					fi
+			}
+
 			[[ $flac_padding != "0" ]] && {
 				if ! outerr="$( metaflac --add-padding="$flac_padding" "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'padding'
@@ -663,7 +688,7 @@ else
 		--env absolute_flac_names --env flac_sample_rates \
 		--env target_bit_depths --env target_flacs --env target_folders --env target_sample_rates \
 		--env sox_dither --env sox_verbosity_level --env target_rate_cmd \
-		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag \
+		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork \
 		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output \
 		--env red --env green --env bold --env default \
 		${parallel_progress_bar[0]} ${paralleljobs[0]} --will-cite _execute ::: "${!target_flacs[@]}"
