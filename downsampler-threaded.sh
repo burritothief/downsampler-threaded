@@ -62,7 +62,6 @@ verbose_output="1"                 # print per-file conversion details to stdout
 # TO DO #
 # -remove dependency on env_parallel
 # -delete sources on success (??)
-# -add '--' to 'sox --i -b "$arg"' etc, and anywhere else it is still needed (running an argument-taking command with a filename var)
 # fix potential race condition when using 24-bit outputs (on subsequent runs former targets can become sources /and/ targets)
 
 
@@ -412,10 +411,9 @@ else
 	threads_off="1"
 fi
 
-if command -v realpath >/dev/null 2>&1 ;then realpath="realpath" ;elif command -v grealpath >/dev/null 2>&1 ;then realpath="grealpath"
+if command -v realpath >/dev/null 2>&1 ;then realpath="realpath --" ;elif command -v grealpath >/dev/null 2>&1 ;then realpath="grealpath --"
 else
-	# replace this function? seems to work very well, but requires exec perm on dirs
-	_absolute_path() { ( cd -P "$( dirname "$1" )" 2>/dev/null && printf '%s/%s\n' "$PWD" "$( basename "$1" )" ) ; }
+	_absolute_path() { ( cd -P -- "$( dirname -- "$1" )" 2>/dev/null && printf '%s/%s\n' "$PWD" "$( basename -- "$1" )" ) ; }
 	realpath="_absolute_path"
 fi
 
@@ -458,7 +456,7 @@ fi
 
 # get absolute paths, drop any duplicates
 for arg in "${user_args[@]}" ;do
-	absolute_args+=( "$( "$realpath" "$arg" )" )
+	absolute_args+=( "$( $realpath "$arg" )" )
 done
 #readarray -t unique_args < <( printf '%s\n' "${absolute_args[@]}" | sort -u  )
 while IFS= read -r -d '' ;do
@@ -469,7 +467,7 @@ _message "Reading input file(s)... "
 
 # just the flacs, just the 24 bit flacs
 for arg in "${unique_args[@]}" ;do
-	[[ ! -d $arg && $arg == *.[Ff][Ll][Aa][Cc] ]] && [[ $( sox --i -b "$arg" ) -eq "24" ]] && absolute_flac_names+=( "$arg" )
+	[[ ! -d $arg && $arg == *.[Ff][Ll][Aa][Cc] ]] && [[ $( sox --i -b -- "$arg" ) -eq "24" ]] && absolute_flac_names+=( "$arg" )
 done
 
 # candidate flacs must exist
@@ -477,9 +475,9 @@ done
 
 # source data
 for index in "${!absolute_flac_names[@]}" ;do
-	flac_filenames[$index]="$( basename "${absolute_flac_names[$index]}" )"
-	absolute_flac_dirs[$index]="$( dirname "${absolute_flac_names[$index]}" )"
-	flac_sample_rates[$index]="$( sox --i -r "${absolute_flac_names[$index]}" )"
+	flac_filenames[$index]="$( basename -- "${absolute_flac_names[$index]}" )"
+	absolute_flac_dirs[$index]="$( dirname -- "${absolute_flac_names[$index]}" )"
+	flac_sample_rates[$index]="$( sox --i -r -- "${absolute_flac_names[$index]}" )"
 done
 
 _message "Found ${#absolute_flac_names[@]} candidate FLAC file(s). Configuring output... "
@@ -568,7 +566,7 @@ _execute() {
 			   "${bold}" "${default}" "${target_bit_depths[$index]}" "${target_sample_rates[$index]:-${flac_sample_rates[$index]}}" \
 			   "${bold}" "${default}"
 	}
-	[[ ! -d ${target_folders[$index]} ]] && mkdir -p "${target_folders[$index]}"
+	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
 	if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -G -b "${target_bit_depths[$index]}" "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${sox_dither[0]} 2>&1 )" ;then
 
 		[[ $verbose_output == "1" ]] && {
@@ -602,7 +600,7 @@ _execute() {
 			}
 
 			[[ $flac_padding != "0" ]] && {
-				if ! outerr="$( metaflac --add-padding="$flac_padding" "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --add-padding="$flac_padding" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'padding'
 					metaflac_failures[$index]="1" # these failure arrays sadly are not usable when env_parallel runs this function - gnu parallel has "setenv" but it's
 					imperfect_indexes[$index]="1" # not in every version, and it's not clear that it would help when not using parallel
@@ -610,7 +608,7 @@ _execute() {
 				fi                                # final thought: can still use these arrays inside the function to decide whether to delete successfully converted files!
 			}
 			[[ $use_SOX_COMMAND_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -G -b ${target_bit_depths[$index]} output.flac ${target_rate_cmd[$index]} ${sox_dither[0]}" "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -G -b ${target_bit_depths[$index]} output.flac ${target_rate_cmd[$index]} ${sox_dither[0]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'SOX_COMMAND tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
@@ -618,7 +616,7 @@ _execute() {
 				fi
 			}
 			[[ $use_SOURCE_SPECS_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOURCE_SPECS="24 bit, ${flac_sample_rates[$index]} Hz" "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --set-tag=SOURCE_SPECS="24 bit, ${flac_sample_rates[$index]} Hz" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'SOURCE_SPECS tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
@@ -626,7 +624,7 @@ _execute() {
 				fi
 			}
 			[[ $use_SOURCE_FFP_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOURCE_FFP="$( metaflac --show-md5sum "${absolute_flac_names[$index]}" )" "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --set-tag=SOURCE_FFP="$( metaflac --show-md5sum "${absolute_flac_names[$index]}" )" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'SOURCE_FFP tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
