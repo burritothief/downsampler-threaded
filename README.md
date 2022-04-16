@@ -17,6 +17,7 @@ Additional, optional functionality includes:
    - Add a SOURCE_FFP tag containing the source file's FLAC fingerprint
    - Add a SOURCE_SPECS tag containing the source file's bit depth and sample rate
    - Add a SOX_COMMAND tag containing the SoX command used to create the file
+   - Re-embed any artwork embedded in source FLAC file (which sox otherwise discards)
 
 #### Depends:
 Bash, sox, basename, cat, dirname, sort (-z, -u)
