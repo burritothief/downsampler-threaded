@@ -567,7 +567,7 @@ _execute() {
 			   "${bold}" "${default}"
 	}
 	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
-	if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -G -b "${target_bit_depths[$index]}" "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${sox_dither[0]} 2>&1 )" ;then
+	if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -R -G -b "${target_bit_depths[$index]}" "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${sox_dither[0]} 2>&1 )" ;then
 
 		[[ $verbose_output == "1" ]] && {
 			_message "${green}Success${default}!     "
