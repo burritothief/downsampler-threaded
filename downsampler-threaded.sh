@@ -608,7 +608,7 @@ _execute() {
 				fi                                # final thought: can still use these arrays inside the function to decide whether to delete successfully converted files!
 			}
 			[[ $use_SOX_COMMAND_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -G -b ${target_bit_depths[$index]} output.flac ${target_rate_cmd[$index]} ${sox_dither[0]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -R -G -b ${target_bit_depths[$index]} output.flac ${target_rate_cmd[$index]} ${sox_dither[0]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'SOX_COMMAND tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
