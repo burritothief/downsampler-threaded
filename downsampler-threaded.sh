@@ -485,63 +485,54 @@ _message "Found ${#absolute_flac_names[@]} candidate FLAC file(s). Configuring o
 # target data
 for index in "${!absolute_flac_names[@]}" ;do
 
-	# 24/44 and 24/48 --> 16/44 and 16/48
-	if [[ $use_24_44_and_24_48_input == "1" ]] ;then
-		[[ ${flac_sample_rates[$index]} -eq "44100" || ${flac_sample_rates[$index]} -eq "48000" ]] && {
-			target_bit_depths[$index]="16"
+	target_bits_opt[$index]="-b 16"
+	target_dither_cmd[$index]="$sox_dither"
+	case ${flac_sample_rates[$index]} in
+		44100|48000)
+			((use_24_44_and_24_48_input)) || continue
 			target_sample_rates[$index]=""
 			target_rate_cmd[$index]=""
 			target_folders[$index]="${absolute_flac_dirs[$index]}/unresampled-16bit"
-		}
-	fi
-
-	# 24/176 and 24/192 --> 24/88 and 24/96
-	if [[ $use_24_88_and_24_96_output == "1" ]] ;then
-		if [[ ${flac_sample_rates[$index]} -eq "176400" || ${flac_sample_rates[$index]} -eq "192000" ]] ;then
-
-			[[ ${flac_sample_rates[$index]} -eq "176400" ]] && {
+			;;
+		88200)
+			target_sample_rates[$index]="44100"
+			target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-44"
+			;;
+		96000)
+			target_sample_rates[$index]="48000"
+			target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-48"
+			;;
+		176400)
+			if ((use_24_88_and_24_96_output)) ;then
+				target_bits_opt[$index]=""
 				target_sample_rates[$index]="88200"
-				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-24-88" ; }
-
-			[[ ${flac_sample_rates[$index]} -eq "192000" ]] && {
+				target_dither_cmd[$index]=""
+				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-24-88"
+			else
+				target_sample_rates[$index]="44100"
+				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-44"
+			fi
+			;;
+		192000)
+			if ((use_24_88_and_24_96_output)) ;then
+				target_bits_opt[$index]=""
 				target_sample_rates[$index]="96000"
-				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-24-96" ; }
-
-			target_bit_depths[$index]="24"
-			target_rate_cmd[$index]="${sox_rate[0]} ${target_sample_rates[$index]}"
-
-		# 24/88 and 24/96 --> 16/44 and 16/48
-		elif [[ ${flac_sample_rates[$index]} -eq "88200" || ${flac_sample_rates[$index]} -eq "96000" ]] ;then
-
-			[[ ${flac_sample_rates[$index]} -eq "88200" ]] && {
-				target_sample_rates[$index]="44100"
-				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-44" ; }
-
-			[[ ${flac_sample_rates[$index]} -eq "96000" ]] && {
+				target_dither_cmd[$index]=""
+				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-24-96"
+			else
 				target_sample_rates[$index]="48000"
-				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-48" ; }
-
-			target_bit_depths[$index]="16"
-		    target_rate_cmd[$index]="${sox_rate[0]} ${target_sample_rates[$index]}"
-		fi
-
-	else
-		# 24/{88,96,176,192} --> 16/$common_multiple
-		if [[ ${flac_sample_rates[$index]} -eq "88200" || ${flac_sample_rates[$index]} -eq "96000" ]] ||
-			   [[ ${flac_sample_rates[$index]} -eq "176400" || ${flac_sample_rates[$index]} -eq "192000" ]] ;then
-
-			[[ ${flac_sample_rates[$index]} -eq "88200" || ${flac_sample_rates[$index]} -eq "176400" ]] && {
-				target_sample_rates[$index]="44100"
-				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-44" ; }
-
-			[[ ${flac_sample_rates[$index]} -eq "96000" || ${flac_sample_rates[$index]} -eq "192000" ]] && {
-				target_sample_rates[$index]="48000"
-				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-48" ; }
-
-			target_bit_depths[$index]="16"
-			target_rate_cmd[$index]="${sox_rate[0]} ${target_sample_rates[$index]}"
-		fi
-	fi
+				target_folders[$index]="${absolute_flac_dirs[$index]}/resampled-16-48"
+			fi
+			;;
+		*)
+			continue
+			;;
+	esac
+	[[ -n ${target_sample_rates[$index]} ]] && target_rate_cmd[$index]="${sox_rate} ${target_sample_rates[$index]}"
+	# other parts still needing changes due to the changes above:
+	# replace $target_bit_depths[$index] in _execute status printf: bits=${target_bits_opt[$index]#-b } ; ((bits)) || bits=24
+	# env_parallel execution needs double-checking of --env vars
+	# ?
 
 	# don't set target_flacs[$index] unless the flac at this index has already matched one of the rules above
 	if [[ -n ${target_folders[$index]} ]] ;then
@@ -567,7 +558,7 @@ _execute() {
 			   "${bold}" "${default}"
 	}
 	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
-	if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -R -G -b "${target_bit_depths[$index]}" "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${sox_dither[0]} 2>&1 )" ;then
+	if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -R -G ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
 
 		[[ $verbose_output == "1" ]] && {
 			_message "${green}Success${default}!     "
@@ -608,7 +599,7 @@ _execute() {
 				fi                                # final thought: can still use these arrays inside the function to decide whether to delete successfully converted files!
 			}
 			[[ $use_SOX_COMMAND_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -R -G -b ${target_bit_depths[$index]} output.flac ${target_rate_cmd[$index]} ${sox_dither[0]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -R -G ${target_bits_opt[$index]} output.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'SOX_COMMAND tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
@@ -684,8 +675,8 @@ else
 	"$env_parallel_command" \
 		--env _execute --env _message --env _error \
 		--env absolute_flac_names --env flac_sample_rates \
-		--env target_bit_depths --env target_flacs --env target_folders --env target_sample_rates \
-		--env sox_dither --env sox_verbosity_level --env target_rate_cmd \
+		--env target_flacs --env target_folders --env target_sample_rates \
+		--env target_bits_opt --env target_dither_cmd --env sox_verbosity_level --env target_rate_cmd \
 		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork \
 		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output \
 		--env red --env green --env bold --env default \
