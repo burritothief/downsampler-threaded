@@ -529,10 +529,6 @@ for index in "${!absolute_flac_names[@]}" ;do
 			;;
 	esac
 	[[ -n ${target_sample_rates[$index]} ]] && target_rate_cmd[$index]="${sox_rate} ${target_sample_rates[$index]}"
-	# other parts still needing changes due to the changes above:
-	# replace $target_bit_depths[$index] in _execute status printf: bits=${target_bits_opt[$index]#-b } ; ((bits)) || bits=24
-	# env_parallel execution needs double-checking of --env vars
-	# ?
 
 	# don't set target_flacs[$index] unless the flac at this index has already matched one of the rules above
 	if [[ -n ${target_folders[$index]} ]] ;then
@@ -551,10 +547,11 @@ done
 _execute() {
 	index="$1"
 	[[ $verbose_output == "1" ]] && {
+		local bits="${target_bits_opt[$index]#-b }" ;((bits)) || bits="24"
 		_message -n " ${target_flacs[$index]}:"
 		printf '   %sInput%s: 24 / %-9s %sOutput%s: %s / %-9s %sStatus%s: ' \
 			   "${bold}" "${default}" "${flac_sample_rates[$index]}" \
-			   "${bold}" "${default}" "${target_bit_depths[$index]}" "${target_sample_rates[$index]:-${flac_sample_rates[$index]}}" \
+			   "${bold}" "${default}" "$bits" "${target_sample_rates[$index]:-${flac_sample_rates[$index]}}" \
 			   "${bold}" "${default}"
 	}
 	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
@@ -675,7 +672,7 @@ else
 	"$env_parallel_command" \
 		--env _execute --env _message --env _error \
 		--env absolute_flac_names --env flac_sample_rates \
-		--env target_flacs --env target_folders --env target_sample_rates \
+		--env target_flacs --env target_folders --env target_sample_rates --env bits \
 		--env target_bits_opt --env target_dither_cmd --env sox_verbosity_level --env target_rate_cmd \
 		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork \
 		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output \
