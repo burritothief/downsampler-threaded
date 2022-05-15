@@ -547,11 +547,11 @@ done
 _execute() {
 	index="$1"
 	[[ $verbose_output == "1" ]] && {
-		local bits="${target_bits_opt[$index]#-b }" ;((bits)) || bits="24"
+		local bits="${target_bits_opt[$index]#-b }"
 		_message -n " ${target_flacs[$index]}:"
 		printf '   %sInput%s: 24 / %-9s %sOutput%s: %s / %-9s %sStatus%s: ' \
 			   "${bold}" "${default}" "${flac_sample_rates[$index]}" \
-			   "${bold}" "${default}" "$bits" "${target_sample_rates[$index]:-${flac_sample_rates[$index]}}" \
+			   "${bold}" "${default}" "${bits:-24}" "${target_sample_rates[$index]:-${flac_sample_rates[$index]}}" \
 			   "${bold}" "${default}"
 	}
 	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
