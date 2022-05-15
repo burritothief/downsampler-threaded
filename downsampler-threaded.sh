@@ -140,7 +140,7 @@ ${bold}SoX:${default}
 EOF
 }
 
-version="0.9.1"
+version="0.9.2"
 
 # colourful printf       # tput is not always present
     red=$'\033[0;31m'    # "$( tput setaf 1 )"
