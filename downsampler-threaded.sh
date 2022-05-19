@@ -8,8 +8,15 @@
 threads_used="0"                   # maximum number of threads to use
 threads_unused="0"                 # number of threads to leave unused
 
-# SoX Verbosity - "0" absolutely nothing ever, "1" errors, "2" errors+warnings, "3" errors+warnings+sox_processing_info, "4"+ SoX_debugging
-sox_verbosity_level="1"            # "1" is recommended, must be set, with a number, anything between 0-4 is acceptable, output only displayed after a failure
+# SoX command construction: $sox_bits and $sox_dither are unset for 24 bit outputs, and $sox_rate is unset for 24/44 and 24/48 sources
+# $> sox $sox_pre_input INPUT.flac $sox_pre_output $sox_bits OUTPUT.flac $sox_rate RATE $sox_dither
+
+# 'global' sox options, followed by any 'format options' for the input file
+# /currently/, text/status output is only shown if/when sox has a non-zero exit status
+sox_pre_input="-G -R -V1"
+
+# 'format options' applicable to the output file, excluding '-b' which follows $sox_pre_output, and is set automatically
+sox_pre_output=""
 
 # SoX dither                       # "dither" is recommended, but noise-shaped dither ("dither -s") may help with sources for which -G/--guard is
 sox_dither="dither"                # not sufficient to prevent clipping, and any other valid dither effect command may be set here
@@ -300,10 +307,10 @@ while true ;do
 			recurse_all_subdirs="0"
 			shift
 			;;
-		-v|--sox-verbosity)
-			sox_verbosity_level="$2"
-			shift 2
-			;;
+#		-v|--sox-verbosity)
+#			sox_verbosity_level="$2"
+#			shift 2
+#			;;
 		--version)
 			printf 'downsampler-threaded v%s\n' "$version"
 			exit 0
@@ -357,7 +364,7 @@ else
 fi
 
 # validate sox verbosity
-[[ $sox_verbosity_level == [01234] ]] || { _error "Argument for '-v / --sox-verbosity / sox_verbosity_level' must be an integer between 0 and 4." ;exit 1 ; }
+#[[ $sox_verbosity_level == [01234] ]] || { _error "Argument for '-v / --sox-verbosity / sox_verbosity_level' must be an integer between 0 and 4." ;exit 1 ; }
 
 # ctrl+c exits script, not just sox/whatever --- does this work as expected...?? here's guessing if/when it doesn't, it's a parallel/environment issue
 trap "exit 1" INT
@@ -555,7 +562,8 @@ _execute() {
 			   "${bold}" "${default}"
 	}
 	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
-	if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -R -G ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
+	#if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -R -G ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
+	if outerr="$( sox $sox_pre_input "${absolute_flac_names[$index]}" $sox_pre_output ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
 
 		[[ $verbose_output == "1" ]] && {
 			_message "${green}Success${default}!     "
@@ -596,7 +604,8 @@ _execute() {
 				fi                                # final thought: can still use these arrays inside the function to decide whether to delete successfully converted files!
 			}
 			[[ $use_SOX_COMMAND_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -R -G ${target_bits_opt[$index]} output.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
+				#if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -R -G ${target_bits_opt[$index]} output.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
+				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox $sox_pre_input INPUT.flac $sox_pre_output ${target_bits_opt[$index]} OUTPUT.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
 					_metaflac_failure 'SOX_COMMAND tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
@@ -673,7 +682,7 @@ else
 		--env _execute --env _message --env _error \
 		--env absolute_flac_names --env flac_sample_rates \
 		--env target_flacs --env target_folders --env target_sample_rates --env bits \
-		--env target_bits_opt --env target_dither_cmd --env sox_verbosity_level --env target_rate_cmd \
+		--env sox_pre_input --env sox_pre_output --env target_bits_opt --env target_rate_cmd --env target_dither_cmd \
 		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork \
 		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output \
 		--env red --env green --env bold --env default \
