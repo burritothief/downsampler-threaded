@@ -348,7 +348,7 @@ done
 [[ $# -ge "1" ]] || { _error "Nothing to do, please specify at least one file or folder." ;_print_usage ;exit 1 ; }
 
 # Bash required
-[[ -n $BASH_VERSION ]] || { printf 'Interpreter does not appear to be Bash, aborting.' ;exit 1 ; }
+[[ -n $BASH_VERSION ]] || { _error "Interpreter does not appear to be Bash, aborting." ;exit 1 ; }
 
 # validate threads
 if [[ $threads_off != "1" ]] ;then
