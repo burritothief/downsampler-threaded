@@ -347,6 +347,9 @@ done
 # argument(s) required
 [[ $# -ge "1" ]] || { _error "Nothing to do, please specify at least one file or folder." ;_print_usage ;exit 1 ; }
 
+# Bash required
+[[ -n $BASH_VERSION ]] || { printf 'Interpreter does not appear to be Bash, aborting.' ;exit 1 ; }
+
 # validate threads
 if [[ $threads_off != "1" ]] ;then
 	[[ $threads_used   != *[!0123456789]* ]] || { _error "Argument for '-t / --threads / threads_used' must be zero or a positive integer."     ;exit 1 ; }
@@ -427,7 +430,7 @@ fi
 # handle file/folder arguments
 user_args=( "$@" )
 if [[ $recurse_all_subdirs == "1" ]] ;then
-	if shopt -s globstar nullglob ;then
+	if shopt -s globstar nullglob >/dev/null 2>&1 ;then
 		for arg in "${user_args[@]}" ;do
 			[[ -d $arg ]] && user_args+=( "$arg"/**/*.[Ff][Ll][Aa][Cc] )
 		done
