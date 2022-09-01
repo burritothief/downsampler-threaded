@@ -13,7 +13,7 @@ threads_unused="0"                 # number of threads to leave unused
 
 # 'global' sox options, followed by any 'format options' for the input file
 # /currently/, text/status output is only shown if/when sox has a non-zero exit status
-sox_pre_input="-G -R -V1"
+sox_pre_input="-G -R -V2"
 
 # 'format options' applicable to the output file, excluding '-b' which follows $sox_pre_output, and is set automatically
 sox_pre_output=""
@@ -570,6 +570,14 @@ _execute() {
 
 		[[ $verbose_output == "1" ]] && {
 			_message "${green}Success${default}!     "
+
+			sox_emits="1"
+			# awk indents (each line of) $soxout, but in some modes, sox uses a carriage return on a
+			# repeatedly-emitted (and newline-omitted) single line of its per-file stdout (an ongoing status/progress display)
+			# sed replaces each carriage return with a carriage return followed by the same number of spaces awk indents all the other lines to
+			[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
+				printf -- '\n    -> Sox Output:\n       ->\n%s\n       ->' "$( printf -- '%s' "${outerr}" |awk -- '{ print "          " $0 }' |sed -- 's/\r/\r          /g' )"
+
 			[[ $metaflac_enabled == "1" ]] && _message "${bold}metaflac${default}: "
 		}
 
