@@ -60,6 +60,7 @@ use_SOX_COMMAND_tag="1"            # create a tag detailing the SoX command used
 use_progress_bar="0"               # use GNU parallel's progress bar (no effect in single thread mode)
 
 verbose_output="1"                 # print per-file conversion details to stdout during operation
+sox_emits="1"                      # emit any output from sox to stdout & stderr --> depends on verbose_output="1" / --info / -i
 
   ####                       ####
 ####  End of Default Settings  ####
@@ -571,12 +572,12 @@ _execute() {
 		[[ $verbose_output == "1" ]] && {
 			_message "${green}Success${default}!     "
 
-			sox_emits="1"
 			# awk indents (each line of) $soxout, but in some modes, sox uses a carriage return on a
 			# repeatedly-emitted (and newline-omitted) single line of its per-file stdout (an ongoing status/progress display)
 			# sed replaces each carriage return with a carriage return followed by the same number of spaces awk indents all the other lines to
 			[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
-				printf -- '\n    -> Sox Output:\n       ->\n%s\n       ->' "$( printf -- '%s' "${outerr}" |awk -- '{ print "          " $0 }' |sed -- 's/\r/\r          /g' )"
+				printf -v sox_outerr -- '      %s*%s sox had this output:\n      %s-----%s\n%s\n      %s-----%s\n\n' \
+					   "$orange" "$default" "$bold" "$default" "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$bold" "$default"
 
 			[[ $metaflac_enabled == "1" ]] && _message "${bold}metaflac${default}: "
 		}
@@ -585,8 +586,8 @@ _execute() {
 
 			_metaflac_failure() {
 				if [[ $verbose_output == "1" ]] ;then
-					printf '%sFAILED%s! to add %s\n   %s*%s Aborting any further tasks for this file.\n   %s*%s metaflac failed with this output:\n   %s-----%s\n%s\n   %s-----%s\n\n\n\n' \
-						   "${red}" "${default}" "$1" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
+					printf '%sFAILED%s! to add %s\n\n      %s*%s Aborting any further tasks for this file.\n      %s*%s metaflac failed with this output:\n      %s-----%s\n%s\n      %s-----%s\n\n' \
+						   "${red}" "${default}" "$1" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "$( printf '%s' "$outerr" | awk -- '{ print "      " $0 }' )" "${bold}" "${default}"
 				else
 					printf '%sERROR%s! metaflac had non-zero exit status adding %s to target %s%s%s.\n %s*%s Aborting any further tasks for this file.\n %s*%s metaflac failed with this output:\n %s-----%s\n%s\n %s-----%s\n\n\n\n' \
 						   "${red}" "${default}" "$1" "${bold}" "${target_flacs[$index]}" "${default}" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
@@ -597,11 +598,13 @@ _execute() {
 				local artwork="${target_flacs[$index]}.metaflac.img"
 				metaflac --export-picture-to="$artwork" -- "${absolute_flac_names[$index]}" >/dev/null 2>&1 && # export failure is the best(? good even?) test for artwork existence? so far...
 					if outerr="$( metaflac --import-picture-from="$artwork" -- "${target_flacs[$index]}" 2>&1 )" ;then
+					#if ! [[ ${absolute_flac_names[$index]} == *"03-foo.flac" ]] ;then
 						rm -- "$artwork"
 					else
 						_metaflac_failure 'embedded artwork'
 						metaflac_failures[$index]="1"
 						imperfect_indexes[$index]="1"
+						[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
 						return 1
 					fi
 			}
@@ -611,6 +614,7 @@ _execute() {
 					_metaflac_failure 'padding'
 					metaflac_failures[$index]="1" # these failure arrays sadly are not usable when env_parallel runs this function - gnu parallel has "setenv" but it's
 					imperfect_indexes[$index]="1" # not in every version, and it's not clear that it would help when not using parallel
+					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
 					return 1                      # ?? exit status seems like the only "var" we can send/export out of env_parallel's environment and use in the script's environment ??
 				fi                                # final thought: can still use these arrays inside the function to decide whether to delete successfully converted files!
 			}
@@ -620,6 +624,7 @@ _execute() {
 					_metaflac_failure 'SOX_COMMAND tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
+					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
 					return 1
 				fi
 			}
@@ -628,6 +633,7 @@ _execute() {
 					_metaflac_failure 'SOURCE_SPECS tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
+					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
 					return 1
 				fi
 			}
@@ -636,13 +642,16 @@ _execute() {
 					_metaflac_failure 'SOURCE_FFP tag'
 					metaflac_failures[$index]="1"
 					imperfect_indexes[$index]="1"
+					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
 					return 1
 				fi
 			}
-			
+
+			# really needed to have '-z $metaflac_failures' ? is return not called every time it's non-zero?
 			[[ $verbose_output == "1" && -z "${metaflac_failures[$index]}" ]] && _message -N "${green}Done${default}!"
+			[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
 		}
-		
+
 		# delete successfully converted source files here! ... with your own code for now, sorry. I'll get there eventually I _swear_ !
 		# [[ $source_deletion_enabled == "1" && -z ${metaflac_failures[$index]} ]] && { rm -f -- "${absolute_flac_names[$index]}" ; } # or something
 		# 'rmdir' later, outside this 'if' (? tracking succcess/fail in env_parallel? ... or?)  ... or just "rmdir "${target_folders[$index]}" >/dev/null 2>&1" right here, on every index, yay rmdir
@@ -650,10 +659,10 @@ _execute() {
 		return 0
 	else
 		if [[ $verbose_output == "1" ]] ;then
-			printf '%sFAILED%s!\n   %s*%s Aborting any follow-up tasks for this file.\n   %s*%s sox failed with this output:\n   %s-----%s\n%s\n   %s-----%s\n\n\n\n' \
+			printf '%sFAILED%s!\n   %s*%s Aborting any follow-up tasks for this file.\n   %s*%s sox failed with this output:\n   %s-----%s\n%s\n   %s-----%s\n\n' \
 				   "${red}" "${default}" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
 		else
-			printf '%sERROR%s! sox had non-zero exit status converting target %s%s%s.\n %s*%s Aborting any follow-up tasks for this file.\n %s*%s sox failed with this output:\n %s-----%s\n%s\n %s-----%s\n\n\n\n' \
+			printf '%sERROR%s! sox had non-zero exit status converting target %s%s%s.\n %s*%s Aborting any follow-up tasks for this file.\n %s*%s sox failed with this output:\n %s-----%s\n%s\n %s-----%s\n\n' \
 				   "${red}" "${default}" "${bold}" "${target_flacs[$index]}" "${default}" "${red}" "${default}" "${red}" "${default}"  "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
 		fi
 		sox_failures[$index]="1"
@@ -694,9 +703,9 @@ else
 		--env absolute_flac_names --env flac_sample_rates \
 		--env target_flacs --env target_folders --env target_sample_rates --env bits \
 		--env sox_pre_input --env sox_pre_output --env target_bits_opt --env target_rate_cmd --env target_dither_cmd \
-		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork \
+		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork --env sox_emits \
 		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output \
-		--env red --env green --env bold --env default \
+		--env red --env green --env bold --env orange --env default \
 		${parallel_progress_bar[0]} ${paralleljobs[0]} --will-cite _execute ::: "${!target_flacs[@]}"
 
 	parallel_exit_status="$?"
