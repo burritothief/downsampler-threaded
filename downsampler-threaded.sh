@@ -21,6 +21,9 @@ sox_pre_output=""
 # SoX dither                       # "dither" is recommended, but noise-shaped dither ("dither -s") may help with sources for which -G/--guard is
 sox_dither="dither"                # not sufficient to prevent clipping, and any other valid dither effect command may be set here
 
+# secondary dither                 # if sox is successful but dither-related clipping is detected,
+sox_clipped_dither="dither -s"     # re-run sox using this dither command
+
 # SoX rate
 sox_rate="rate -v -L"              # Set any valid rate effect command for SoX here, "rate -v -L" is recommended
 
@@ -148,14 +151,18 @@ ${bold}SoX:${default}
 EOF
 }
 
-version="0.9.2"
+version="0.9.2-pre"
 
+use_colours="1"                    # use colours in console text outputs
+# ELSE colour vars are never set, every colour-code-containing printf argument will be empty
 # colourful printf       # tput is not always present
-    red=$'\033[0;31m'    # "$( tput setaf 1 )"
-  green=$'\033[0;32m'    # "$( tput setaf 2  )"
- orange=$'\033[0;33m'    # "$( tput setaf 3 )"
-   bold=$'\033[1m'       #     tput srg1 # ??
-default=$'\033[0m'       # "$( tput sgr0 )"
+[ "$use_colours" = "1" ] && {
+	    red=$'\033[0;31m'    # "$( tput setaf 1 )"
+	  green=$'\033[0;32m'    # "$( tput setaf 2  )"
+	 orange=$'\033[0;33m'    # "$( tput setaf 3 )"
+	   bold=$'\033[1m'       #     tput srg1 # ??
+	default=$'\033[0m'       # "$( tput sgr0 )"
+}
 
 _message() {
 	case "$1" in
@@ -399,7 +406,7 @@ if [[ $flac_padding != "0" || $use_SOURCE_SPECS_tag == "1" || $use_SOX_COMMAND_t
 fi
 
 if [[ $threads_off == "1" ]] ;then
-	_message -n "${orange}Running in single thread mode.${default}."
+	_message -n "${orange}Running in single thread mode${default}."
 elif command -v "$env_parallel_command" >/dev/null 2>&1 && command -v "$env_parallel_bash" >/dev/null 2>&1 ;then
 	[[ $use_progress_bar == "1" ]] && parallel_progress_bar[0]="--bar"
 	if [[ $threads_unused -gt "0" && $threads_used -gt "0" ]] ;then
@@ -557,173 +564,393 @@ done
 # where all the output-producing and output-modifying actions happen
 _execute() {
 	index="$1"
-	[[ $verbose_output == "1" ]] && {
-		local bits="${target_bits_opt[$index]#-b }"
-		_message -n " ${target_flacs[$index]}:"
-		printf '   %sInput%s: 24 / %-9s %sOutput%s: %s / %-9s %sStatus%s: ' \
-			   "${bold}" "${default}" "${flac_sample_rates[$index]}" \
-			   "${bold}" "${default}" "${bits:-24}" "${target_sample_rates[$index]:-${flac_sample_rates[$index]}}" \
-			   "${bold}" "${default}"
-	}
+
+	local outerr status clipping_message artwork bits output1 output2 output3 return_code \
+		  sox1 sox1_colour sox1_outerr dither1 dither1_colour \
+		  sox2 sox2_colour sox2_outerr dither2 dither2_colour \
+		  metaflac_status metaflac_status_colour metaflac_failure metaflac_error
+
 	[[ ! -d ${target_folders[$index]} ]] && mkdir -p -- "${target_folders[$index]}"
-	#if outerr="$( sox -V"${sox_verbosity_level[0]}" "${absolute_flac_names[$index]}" -R -G ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
+
+
+	## run sox
 	if outerr="$( sox $sox_pre_input "${absolute_flac_names[$index]}" $sox_pre_output ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
+		# sox 1 is successful
 
-		[[ $verbose_output == "1" ]] && {
-			_message "${green}Success${default}!     "
-
+		[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
 			# awk indents (each line of) $soxout, but in some modes, sox uses a carriage return on a
 			# repeatedly-emitted (and newline-omitted) single line of its per-file stdout (an ongoing status/progress display)
 			# sed replaces each carriage return with a carriage return followed by the same number of spaces awk indents all the other lines to
-			[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
-				printf -v sox_outerr -- '      %s*%s sox had this output:\n      %s-----%s\n%s\n      %s-----%s\n\n' \
-					   "$orange" "$default" "$bold" "$default" "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$bold" "$default"
+			printf -v sox1_outerr -- '
 
-			[[ $metaflac_enabled == "1" ]] && _message "${bold}metaflac${default}: "
-		}
+    %s*%s SoX 1 had this output:
+      %s----------%s
+%s
+      %s----------%s' \
+				   "$bold" "$default" "$bold" "$default" "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$bold" "$default"
 
-		[[ $metaflac_enabled == "1" ]] && {
+		if [ -z "${target_bits_opt[$index]}" ] ;then
+			# this is a tier 2 output - no dither is applied for 24b --> 24b
+			status="9"
+			printf -v sox1 --    'OK' ;printf -v sox1_colour -- '%s' "$green"
+			printf -v dither1 -- 'N/A'
+			printf -v sox2 --    'N/A'
+			printf -v dither2 -- 'N/A'
 
-			_metaflac_failure() {
-				if [[ $verbose_output == "1" ]] ;then
-					printf '%sFAILED%s! to add %s\n\n      %s*%s Aborting any further tasks for this file.\n      %s*%s metaflac failed with this output:\n      %s-----%s\n%s\n      %s-----%s\n\n' \
-						   "${red}" "${default}" "$1" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "$( printf '%s' "$outerr" | awk -- '{ print "      " $0 }' )" "${bold}" "${default}"
+		elif [[ $outerr != *"WARN dither: dither clipped"* ]] ;then
+			# this is a tier 1 output and dither 1 didn't clip
+			status="8"
+			printf -v sox1 --    'OK' ;printf -v sox1_colour --    '%s' "$green"
+			printf -v dither1 -- 'OK' ;printf -v dither1_colour -- '%s' "$green"
+			printf -v sox2 --    'N/A'
+			printf -v dither2 -- 'N/A'
+
+		else
+			# this is a tier 1 output and dither 1 did clip
+			if outerr="$( sox $sox_pre_input "${absolute_flac_names[$index]}" $sox_pre_output ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${sox_clipped_dither} 2>&1 )" ;then
+				# sox 2 is successful
+
+				# test/debug - force fake clipping to be detected on sox2
+				#printf -v outerr -- 'fake sox output\nsox WARN dither: dither clipped a ton of samples!\n'
+
+				[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
+					printf -v sox2_outerr -- '
+
+    %s*%s SoX 2 had this output:
+      %s----------%s
+%s
+      %s----------%s' "$bold" "$default" "$bold" "$default" "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$bold" "$default"
+
+				if [[ $outerr != *"WARN dither: dither clipped"* ]] ;then
+					# dither 2 didn't clip
+					status="7"
+					printf -v sox1 --    'OK'      ;printf -v sox1_colour --    '%s' "$green"
+					printf -v dither1 -- 'CLIPPED' ;printf -v dither1_colour -- '%s' "$orange"
+					printf -v sox2 --    'OK'      ;printf -v sox2_colour --    '%s' "$green"
+					printf -v dither2 -- 'OK'      ;printf -v dither2_colour -- '%s' "$green"
+
 				else
-					printf '%sERROR%s! metaflac had non-zero exit status adding %s to target %s%s%s.\n %s*%s Aborting any further tasks for this file.\n %s*%s metaflac failed with this output:\n %s-----%s\n%s\n %s-----%s\n\n\n\n' \
-						   "${red}" "${default}" "$1" "${bold}" "${target_flacs[$index]}" "${default}" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
-				fi
-			}
+					# dither 2 clipped
+					status="3"
+					printf -v sox1 --    'OK'      ;printf -v sox1_colour --    '%s' "$green"
+					printf -v dither1 -- 'CLIPPED' ;printf -v dither1_colour -- '%s' "$orange"
+					printf -v sox2 --    'OK'      ;printf -v sox2_colour --    '%s' "$green"
+					printf -v dither2 -- 'CLIPPED' ;printf -v dither2_colour -- '%s' "$orange"
 
-			[[ $embed_artwork == "1" ]] && {
-				local artwork="${target_flacs[$index]}.metaflac.img"
+					printf -v clipping_message -- '
+
+    %s*%s Dither clipped on both runs, you can use a different dither command with the "-d / --dither" option, to try a different noise-shaping filter.
+    %s*%s For more information on noise-shaping filters, see the manpage for sox, under EFFECTS --> Supported Effects --> dither.' \
+						   "$orange" "$default" "$orange" "$default"
+					# list dither commands used in sox1 and/if sox2 runs
+					# emit sox2_outerr? or a message about sox_emits if (( ! sox_emits )) ?
+				fi
+
+			else
+				# sox 2 failed
+				status="2"
+				printf -v sox1 --    'OK'      ;printf -v sox1_colour --    '%s' "$green"
+				printf -v dither1 -- 'CLIPPED' ;printf -v dither1_colour -- '%s' "$orange"
+				printf -v sox2 --    'FAILED'  ;printf -v sox2_colour --    '%s' "$red"
+				printf -v dither2 -- 'N/A'
+				printf -v metaflac_status -- 'N/A'
+
+				printf -v sox2_outerr -- '
+
+    %s*%s SoX 2 failed with the following output, aborting any follow-up tasks for this file.
+    %s*%s It'\''s likely "sox_clipped_dither" is set with an invalid dither command.
+      %s----------%s
+%s
+      %s----------%s' \
+					   "$red" "$default" "$orange" "$default" \
+					   "$red" "$default" \
+					   "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$red" "$default"
+
+			fi
+		fi
+	else
+		# sox 1 failed
+		status="1"
+		printf -v sox1 --    'FAILED' ;printf -v sox1_colour -- '%s' "$red"
+		printf -v dither1 -- 'N/A'
+		printf -v sox2 --    'N/A'
+		printf -v dither2 -- 'N/A'
+		printf -v metaflac_status -- 'N/A'
+
+		printf -v sox1_outerr -- '
+
+    %s*%s SoX 1 failed with the following output, aborting any follow-up tasks for this file.
+      %s----------%s
+%s
+      %s----------%s' \
+			   "$red" "$default" "$red" "$default" \
+			   "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$red" "$default"
+	fi
+
+
+	## run metaflac
+	if [ "$metaflac_enabled" = "1" ] ;then
+
+		[[ "$status" == [9873] ]] && {
+
+			[ "$embed_artwork" == "1" ] && {
+
+				artwork="${target_flacs[$index]}.metaflac.img"
+				# put "metaflac --export" into a proper if statement and set metaflac_artwork="_something_" when export fails/no artwork? ... use "2" to signify no embedded artwork in source?
 				metaflac --export-picture-to="$artwork" -- "${absolute_flac_names[$index]}" >/dev/null 2>&1 && # export failure is the best(? good even?) test for artwork existence? so far...
 					if outerr="$( metaflac --import-picture-from="$artwork" -- "${target_flacs[$index]}" 2>&1 )" ;then
-					#if ! [[ ${absolute_flac_names[$index]} == *"03-foo.flac" ]] ;then
 						rm -- "$artwork"
 					else
-						_metaflac_failure 'embedded artwork'
-						metaflac_failures[$index]="1"
-						imperfect_indexes[$index]="1"
-						[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
-						return 1
+						metaflac_failure="embedded artwork"
 					fi
 			}
 
-			[[ $flac_padding != "0" ]] && {
-				if ! outerr="$( metaflac --add-padding="$flac_padding" -- "${target_flacs[$index]}" 2>&1 )" ;then
-					_metaflac_failure 'padding'
-					metaflac_failures[$index]="1" # these failure arrays sadly are not usable when env_parallel runs this function - gnu parallel has "setenv" but it's
-					imperfect_indexes[$index]="1" # not in every version, and it's not clear that it would help when not using parallel
-					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
-					return 1                      # ?? exit status seems like the only "var" we can send/export out of env_parallel's environment and use in the script's environment ??
-				fi                                # final thought: can still use these arrays inside the function to decide whether to delete successfully converted files!
+			[ "$flac_padding" != "0" ] && [ -z "$metaflac_failure" ] && {
+
+				outerr="$( metaflac --add-padding="$flac_padding" -- "${target_flacs[$index]}" 2>&1 )" ||
+					metaflac_failure="padding"
+				# test/debug
+				# outerr="$( metaflac --add-padding="$flac_padding" -- "${target_flacs[$index]}" 2>&1 )" && {
+				# 	metaflac_failure="padding" ;printf -v outerr -- 'fake metaflac failure\nfoo bar baz\n'
+				# }
 			}
-			[[ $use_SOX_COMMAND_tag == "1" ]] && {
-				#if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox input.flac -R -G ${target_bits_opt[$index]} output.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
-				if ! outerr="$( metaflac --set-tag=SOX_COMMAND="sox $sox_pre_input INPUT.flac $sox_pre_output ${target_bits_opt[$index]} OUTPUT.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- "${target_flacs[$index]}" 2>&1 )" ;then
-					_metaflac_failure 'SOX_COMMAND tag'
-					metaflac_failures[$index]="1"
-					imperfect_indexes[$index]="1"
-					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
-					return 1
-				fi
-			}
-			[[ $use_SOURCE_SPECS_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOURCE_SPECS="24 bit, ${flac_sample_rates[$index]} Hz" -- "${target_flacs[$index]}" 2>&1 )" ;then
-					_metaflac_failure 'SOURCE_SPECS tag'
-					metaflac_failures[$index]="1"
-					imperfect_indexes[$index]="1"
-					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
-					return 1
-				fi
-			}
-			[[ $use_SOURCE_FFP_tag == "1" ]] && {
-				if ! outerr="$( metaflac --set-tag=SOURCE_FFP="$( metaflac --show-md5sum "${absolute_flac_names[$index]}" )" -- "${target_flacs[$index]}" 2>&1 )" ;then
-					_metaflac_failure 'SOURCE_FFP tag'
-					metaflac_failures[$index]="1"
-					imperfect_indexes[$index]="1"
-					[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
-					return 1
+
+			[ "$use_SOX_COMMAND_tag" == "1" ] && [ -z "$metaflac_failure" ] && {
+
+				if [ "$status" = "8" ] || [ "$status" = "9" ] ;then
+					outerr="$( metaflac --set-tag=SOX_COMMAND="sox $sox_pre_input INPUT.flac $sox_pre_output ${target_bits_opt[$index]} OUTPUT.flac ${target_rate_cmd[$index]} ${target_dither_cmd[$index]}" -- \
+                      "${target_flacs[$index]}" 2>&1 )" ||
+						metaflac_failure="SOX_COMMAND tag"
+
+				elif [ "$status" = "7" ] || [ "$status" = "3" ] ;then
+					outerr="$( metaflac --set-tag=SOX_COMMAND="sox $sox_pre_input INPUT.flac $sox_pre_output ${target_bits_opt[$index]} OUTPUT.flac ${target_rate_cmd[$index]} ${sox_clipped_dither}" -- \
+                      "${target_flacs[$index]}" 2>&1 )" ||
+						metaflac_failure="SOX_COMMAND tag"
 				fi
 			}
 
-			# really needed to have '-z $metaflac_failures' ? is return not called every time it's non-zero?
-			[[ $verbose_output == "1" && -z "${metaflac_failures[$index]}" ]] && _message -N "${green}Done${default}!"
-			[[ -n "$sox_outerr" ]] && [ "$sox_emits" = "1" ] && printf '%s' "$sox_outerr"
+			[ "$use_SOURCE_SPECS_tag" == "1" ] && [ -z "$metaflac_failure" ] && {
+
+				outerr="$( metaflac --set-tag=SOURCE_SPECS="24 bit, ${flac_sample_rates[$index]} Hz" -- "${target_flacs[$index]}" 2>&1 )" ||
+					metaflac_failure="SOURCE_SPECS tag"
+			}
+
+			[ "$use_SOURCE_FFP_tag" == "1" ] && [ -z "$metaflac_failure" ] && {
+
+				outerr="$( metaflac --set-tag=SOURCE_FFP="$( metaflac --show-md5sum "${absolute_flac_names[$index]}" )" -- "${target_flacs[$index]}" 2>&1 )" ||
+					metaflac_failure="SOURCE_FFP tag"
+			}
+
+			# set metaflac status variables and colours
+			if [ -z "$metaflac_failure" ] ;then
+				printf -v metaflac_status -- 'OK'
+				printf -v metaflac_status_colour -- '%s' "$green"
+				status="${status}0"
+
+			else
+				printf -v metaflac_status -- 'FAILED'
+				printf -v metaflac_status_colour -- '%s' "$red"
+
+				# assume for now that if metaflac fails, there will always be some output
+				# [ -n "$metaflac_outerr" ] &&
+				printf -v metaflac_error -- '
+
+    %s*%s metaflac failed to add %s, and had the following output. Aborting any further metaflac tasks for this file.
+      %s----------%s
+%s
+      %s----------%s' \
+					   "${red}" "${default}" "$metaflac_failure" \
+					   "${red}" "${default}" "$( printf '%s' "$outerr" |awk -- '{ print "      " $0 }' )" \
+					   "${red}" "${default}"
+				status="${status}1"
+			fi
 		}
-
-		# delete successfully converted source files here! ... with your own code for now, sorry. I'll get there eventually I _swear_ !
-		# [[ $source_deletion_enabled == "1" && -z ${metaflac_failures[$index]} ]] && { rm -f -- "${absolute_flac_names[$index]}" ; } # or something
-		# 'rmdir' later, outside this 'if' (? tracking succcess/fail in env_parallel? ... or?)  ... or just "rmdir "${target_folders[$index]}" >/dev/null 2>&1" right here, on every index, yay rmdir
-
-		return 0
-	else
-		if [[ $verbose_output == "1" ]] ;then
-			printf '%sFAILED%s!\n   %s*%s Aborting any follow-up tasks for this file.\n   %s*%s sox failed with this output:\n   %s-----%s\n%s\n   %s-----%s\n\n' \
-				   "${red}" "${default}" "${red}" "${default}" "${red}" "${default}" "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
-		else
-			printf '%sERROR%s! sox had non-zero exit status converting target %s%s%s.\n %s*%s Aborting any follow-up tasks for this file.\n %s*%s sox failed with this output:\n %s-----%s\n%s\n %s-----%s\n\n' \
-				   "${red}" "${default}" "${bold}" "${target_flacs[$index]}" "${default}" "${red}" "${default}" "${red}" "${default}"  "${bold}" "${default}" "${outerr}" "${bold}" "${default}"
-		fi
-		sox_failures[$index]="1"
-		imperfect_indexes[$index]="1"
-		return 1
+	else # no metaflac-requiring script features are enabled
+		printf -v metaflac_status -- '%s' "Disabled"
+		status="${status}2"
 	fi
-}
+
+
+	## print messages, or don't
+	if [ "$verbose_output" = "1" ] ;then
+
+		printf -v output1 -- '
+
+
+  %s
+    %sInput%s    %sOutput%s    %sSoX (1)%s | %sDither%s    %sSoX (2)%s | %sDither%s    %smetaflac%s' \
+			   "${target_flacs[$index]}" \
+			   "$bold" "$default" "$bold" "$default" "$bold" "$default" "$bold" "$default" "$bold" "$default" "$bold" "$default" "$bold" "$default"
+
+		bits="${target_bits_opt[$index]#-b }"
+		printf -v output2 -- '
+    24/%-4s  %s/%-7s %s%6s%s | %s%-7s%s %s%9s%s | %s%-9s%s %s%s%s' \
+			   "$(( ${flac_sample_rates[$index]} / 1000 ))" "${bits:-24}" "$(( ${target_sample_rates[$index]:-${flac_sample_rates[$index]}} / 1000 ))" \
+			   "$sox1_colour" "$sox1" "$default" "$dither1_colour" "$dither1" "$default" \
+			   "$sox2_colour" "$sox2" "$default" "$dither2_colour" "$dither2" "$default" \
+			   "$metaflac_status_colour" "$metaflac_status" "$default"
+
+		printf -v output3 -- '%s%s%s%s' \
+			   "$sox1_outerr" "$sox2_outerr" "$metaflac_error" "$clipping_message"
+
+		printf '%s%s%s' "$output1" "$output2" "$output3"
+
+
+	else # (( ! verbose_output )) / only emit details about imperfect results
+
+		case $status in
+			1)
+				# sox1 failure
+				printf -v output1 -- '%s' "$sox1_outerr"
+				;;
+			2)
+				# sox2 failure
+				printf -v output1 -- '%s%s' "$sox1_outerr" "$sox2_outerr"
+				;;
+			91 | 81 | 71 )
+				# sox success, no clipping, but metaflac failure
+				printf -v output1 -- '%s' "$metaflac_error"
+				;;
+			30)
+				# clipping on both sox runs, but metaflac OK
+				printf -v output1 -- '%s' "$clipping_message"
+				;;
+			31)
+				# clipping on both sox runs, and metaflac failed
+				printf -v output1 -- '%s%s' "$clipping_message" "$metaflac_error"
+				;;
+			# else? something about disabled metaflac?
+		esac
+
+		[ -n "$output1" ] && {
+			printf '\n\n\n  %s%s' "${target_flacs[$index]}" "$output1"
+		}
+	fi
+
+	# exit codes ... hopefully !> half-irrelevant
+	# STATUS  RETURN  DESCRIPTION
+	# 70      0       sox2 succeeds without clipping, metaflac succeeds
+	# 80      0       sox1 succeeds without clipping, metaflac succeeds
+	# 90      0       sox1 succeeds, no dither, metaflac succeeds
+	# 1       1       sox1 fails, metaflac aborted
+	# 2       2       sox2 fails, metaflac aborted
+	# 30      30      sox1 and sox2 succeed but with clipping, metaflac succeeds
+	# 31      31      sox1 and sox2 succeed but with clipping, metaflac fails
+	# 71      71      sox2 succeeds without clipping, metaflac fails
+	# 81      81      sox1 succeeds without clipping, metaflac fails
+	# 91      91      sox2 succeeds, no dither, metaflac fails
+	# ?2      ?2      yada yada yada, metaflac disabled
+
+	case $status in # rename $status -> $return_code and then just re-set it to "0" on success, or leave it as-is
+		9[02] | 8[02] | 7[02] )
+			return_code="0"
+			;;
+		1 | 2 | 91 | 81 | 71 | 30 | 31 | ?2 )
+			return_code="$status"
+			;;
+		# ok to go overboard doling out the return codes here/earlier, stop thinking about this until later
+		# as long as [ success = 0 && non-success != 0 ] then this is fine for now!
+	esac
+
+	[ "$return_code" = "0" ] && {
+		# AT YOUR OWN RISK, especially if you didn't get this from the 'main' branch,
+		# do the extra stuff you want to do when everything went well, eg:
+		# rm -- "${absolute_flac_names[$index]}"
+		# mkspectrograms.sh -- "${target_flacs[$index]}"
+		# run_program -on "${target_flacs[$index]}" > "${target_folders[$index]}"/program_log.txt 2>&1
+		# what have you
+		true
+	}
+
+	return "$return_code"
+
+} # end of _execute
+
 
 # use the _execute function, with threads, or without, to output ${target_flacs[@]}
 if [[ $threads_off == "1" ]] ;then
-	_message -N "Converting ${#target_flacs[@]} target(s) with SoX..."
+	printf -- 'Converting %s target(s) with SoX...' "${#target_flacs[@]}"
+	#_message -N "Converting ${#target_flacs[@]} target(s) with SoX..."
 	for index in "${!target_flacs[@]}" ;do
 		_execute "$index"
+		# case $? in
+		# 	etc)
+		# 		true # tally exit codes here?
+		# 		;;
+		# esac
 	done
-	
+
+	# test/debug
+	printf '\n\n\n%sIn single-threaded mode the following final status messages are not currently valid,\nhowever any imperfect results should already have been detailed above.%s' "$orange" "$default"
+
 	if [[ -z ${imperfect_indexes[*]} ]] ;then # appease shellcheck/SC2199 by using [*] instead of [@]
-		_message "${green}Done${default}! "
-		_message -N "Converted ${#target_flacs[@]} target(s) with no apparent failures."
+		# looks a little weird with 2 prepended newlines when there's no error output in non-verbose mode
+		printf -- '\n\n\n%sDone%s. Converted %s target(s) with no apparent failures.\n\n' "$green" "$default" "${#target_flacs[@]}"
+		#_message "${green}Done${default}! "
+		#_message -N "Converted ${#target_flacs[@]} target(s) with no apparent failures."
+
 	elif [[ ${#imperfect_indexes[@]} -eq ${#target_flacs[@]} ]] ;then
-		_message "${red}Done.${default} "
-		_error "TOTAL FAILURE: EVERY TARGET failed at least 1 of their tasks!"
+		printf -- '\n\n\n%sDone%s. %sTotal Failure:%s Every target failed at least 1 of their tasks.\n\n' "${red}" "${default}" "${red}" "${default}"
+		#_message "${red}Done.${default} "
+		#_error "TOTAL FAILURE: EVERY TARGET failed at least 1 of their tasks!"
+
 	else
-		_message "${orange}Done.${default} "
-		_error "PARTIAL FAILURE: At least 1 task failed for ${#imperfect_indexes[@]} (out of ${#target_flacs[@]}) target(s)!"
+		printf -- '\n\n\n%sDone%s. %sPartial Failure%s: At least 1 task failed for %s (out of %s) target(s).\n\n' \
+			   "${orange}" "${default}" "$red" "${default}" "${#imperfect_indexes[@]}" "${#target_flacs[@]}"
+		#_message "${orange}Done.${default} "
+		#_error "PARTIAL FAILURE: At least 1 task failed for ${#imperfect_indexes[@]} (out of ${#target_flacs[@]}) target(s)!"
 	fi
 
-	if [[ $verbose_output != "1" && -n ${imperfect_indexes[*]} ]] ;then # this non-verbose mode failed file listing has been tacked on at the last minute... works??
-		[[ -n ${sox_failures[*]} ]]      && { _message -n "SoX failures:"      ;for index in "${!sox_failures[@]}"      ;do printf '  %s\n' "${target_flacs[$index]}" ;done ; }
-		[[ -n ${metaflac_failures[*]} ]] && { _message -n "metaflac failures:" ;for index in "${!metaflac_failures[@]}" ;do printf '  %s\n' "${target_flacs[$index]}" ;done ; }
-	fi
+	# if [[ $verbose_output != "1" && -n ${imperfect_indexes[*]} ]] ;then # this non-verbose mode failed file listing has been tacked on at the last minute... works??
+	# 	[[ -n ${sox_failures[*]} ]]      && { _message -n "SoX failures:"      ;for index in "${!sox_failures[@]}"      ;do printf '  %s\n' "${target_flacs[$index]}" ;done ; }
+	# 	[[ -n ${metaflac_failures[*]} ]] && { _message -n "metaflac failures:" ;for index in "${!metaflac_failures[@]}" ;do printf '  %s\n' "${target_flacs[$index]}" ;done ; }
+	# fi
 else
-	_message -N "Converting ${#target_flacs[@]} target(s) with SoX and env_parallel..."
+	printf -- 'Converting %s target(s) with SoX and env_parallel...' "${#target_flacs[@]}"
+	#_message -N "Converting ${#target_flacs[@]} target(s) with SoX and env_parallel..."
+
+	# test/debug
+	printf -- '\n\nthere may still be newly-needed (or newly-not-needed) --env options required for env_parallel to run _execute...'
+
 	source "$env_parallel_bash"
-	
+
 	# obvious(?) line groups... (0: env_parallel) 1: functions   2: source data   3: target data   4: sox options   5: metaflac vars   6: script vars   7: colour vars
 	"$env_parallel_command" \
 		--env _execute --env _message --env _error \
 		--env absolute_flac_names --env flac_sample_rates \
 		--env target_flacs --env target_folders --env target_sample_rates --env bits \
-		--env sox_pre_input --env sox_pre_output --env target_bits_opt --env target_rate_cmd --env target_dither_cmd \
-		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork --env sox_emits \
-		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output \
+		--env sox_pre_input --env sox_pre_output --env target_bits_opt --env target_rate_cmd --env target_dither_cmd --env sox_clipped_dither \
+		--env flac_padding --env use_SOX_COMMAND_tag --env use_SOURCE_SPECS_tag --env use_SOURCE_FFP_tag --env embed_artwork \
+		--env metaflac_enabled --env sox_failures --env metaflac_failures --env imperfect_indexes --env verbose_output --env sox_emits \
 		--env red --env green --env bold --env orange --env default \
 		${parallel_progress_bar[0]} ${paralleljobs[0]} --will-cite _execute ::: "${!target_flacs[@]}"
 
 	parallel_exit_status="$?"
 	if [[ $parallel_exit_status -gt "0" ]] ;then       # I *think* I've covered all the possibilities around parallel's exit status... overkill? or missing some key detail?
+
 		if [[ $parallel_exit_status -eq "101" ]] ;then # if only we could get "success=X" exit-status functionality without using '--halt-on-error'! :/
-			_message "${red}Done.${default} "
-			_error "HUGE FAILURE: Over 100 targets failed at least 1 of their tasks!"
+			printf -- '\n\n\n%sDone%s. %sVery Large Failure%s: Over 100 targets failed at least one of their tasks!\n\n' "$red" "$default" "$red" "$default"
+			#_message "${red}Done.${default} "
+			#_error "HUGE FAILURE: Over 100 targets failed at least 1 of their tasks!"
+
 		elif [[ $parallel_exit_status -eq "255" ]] ;then
-			_message "${orange}Done.${default} "
-			_error "env_parallel reports '255' exit status, meaning 'other error', meaning... well, it's definitely NOT success!"
+			printf -- '\n\n\n%sDone%s. env_parallel reports "255" exit status, meaning "other error", which is, well, it'\''s NOT success!\n\n' "$orange" "$default" >&2
+			#_message "${orange}Done.${default} "
+			#_error "env_parallel reports '255' exit status, meaning 'other error', meaning... well, it's definitely NOT success!"
+
 		elif [[ $parallel_exit_status -eq ${#target_flacs[@]} ]] ;then
-			_message "${red}Done.${default} "
-			_error "TOTAL FAILURE: EVERY TARGET failed at least 1 of their tasks!" # if #targets > 100 ;then user gets a different error than this, even if every target failed :/
+			printf -- '\n\n\n%sDone%s. %sTotal Failure%s: Every target failed at least one of their tasks!\n\n' "${red}" "${default}" "${red}" "${default}" >&2
+			#_message "${red}Done.${default} "
+			#_error "TOTAL FAILURE: EVERY TARGET failed at least 1 of their tasks!" # if #targets > 100 ;then user gets a different error than this, even if every target failed :/
+
 		else
-			_message "${orange}Done.${default} "
-			_error "$parallel_exit_status (out of ${#target_flacs[@]}) target(s) failed at least 1 of their tasks!"
+			printf -- '\n\n\n%sDone%s. %s (out of %s) target(s) failed at least 1 of their tasks!\n\n' "$orange" "$default" "$parallel_exit_status" "${#target_flacs[@]}" >&2
+			#_message "${orange}Done.${default} "
+			#_error "$parallel_exit_status (out of ${#target_flacs[@]}) target(s) failed at least 1 of their tasks!"
 		fi
+
 	else
-	    _message -N "${green}Done${default}! Converted ${#target_flacs[@]} target(s) with no apparent failures."
+		printf -- '\n\n\n%sDone%s! Converted %s target(s) with no apparent failures.\n\n' "${green}" "${default}" "${#target_flacs[@]}"
+	    #_message -N "${green}Done${default}! Converted ${#target_flacs[@]} target(s) with no apparent failures."
 	fi
 fi
