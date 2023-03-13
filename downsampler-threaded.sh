@@ -22,7 +22,7 @@ sox_pre_output=""
 sox_dither="dither"                # not sufficient to prevent clipping, and any other valid dither effect command may be set here
 
 # secondary dither                 # if sox is successful but dither-related clipping is detected,
-sox_clipped_dither="dither -s"     # re-run sox using this dither command
+sox_clipped_dither="dither -s"     # sox is run a second time using this dither command
 
 # SoX rate
 sox_rate="rate -v -L"              # Set any valid rate effect command for SoX here, "rate -v -L" is recommended
@@ -577,6 +577,9 @@ _execute() {
 	if outerr="$( sox $sox_pre_input "${absolute_flac_names[$index]}" $sox_pre_output ${target_bits_opt[$index]} "${target_flacs[$index]}" ${target_rate_cmd[$index]} ${target_dither_cmd[$index]} 2>&1 )" ;then
 		# sox 1 is successful
 
+		# test/debug - force fake clipping to be detected on sox1
+		# printf -v outerr -- 'fake sox1 output\nsox WARN dither: dither clipped a ton of samples!\n'
+
 		[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
 			# awk indents (each line of) $soxout, but in some modes, sox uses a carriage return on a
 			# repeatedly-emitted (and newline-omitted) single line of its per-file stdout (an ongoing status/progress display)
@@ -611,7 +614,7 @@ _execute() {
 				# sox 2 is successful
 
 				# test/debug - force fake clipping to be detected on sox2
-				#printf -v outerr -- 'fake sox output\nsox WARN dither: dither clipped a ton of samples!\n'
+				# printf -v outerr -- 'fake sox2 output\nsox WARN dither: dither clipped a ton of samples!\n'
 
 				[ -n "$outerr" ] && [ "$sox_emits" = "1" ] &&
 					printf -v sox2_outerr -- '
@@ -685,6 +688,9 @@ _execute() {
       %s----------%s' \
 			   "$red" "$default" "$red" "$default" \
 			   "$( printf -- '%s' "$outerr" |awk -- '{ print "      " $0 }' |sed -- 's/\r/\r      /g' )" "$red" "$default"
+		# until _fail_logger 'sox1' "${target_flacs[$index]}" ;do
+		# 	sleep 2s
+		# done
 	fi
 
 
@@ -709,7 +715,8 @@ _execute() {
 
 				outerr="$( metaflac --add-padding="$flac_padding" -- "${target_flacs[$index]}" 2>&1 )" ||
 					metaflac_failure="padding"
-				# test/debug
+
+				# test/debug - force fake metaflac failure
 				# outerr="$( metaflac --add-padding="$flac_padding" -- "${target_flacs[$index]}" 2>&1 )" && {
 				# 	metaflac_failure="padding" ;printf -v outerr -- 'fake metaflac failure\nfoo bar baz\n'
 				# }
@@ -742,7 +749,7 @@ _execute() {
 			}
 
 			# set metaflac status variables and colours
-			if [ -z "$metaflac_failure" ] ;then
+			if [[ -z $metaflac_failure ]] ;then
 				printf -v metaflac_status -- 'OK'
 				printf -v metaflac_status_colour -- '%s' "$green"
 				status="${status}0"
@@ -795,6 +802,10 @@ _execute() {
 
 		printf '%s%s%s' "$output1" "$output2" "$output3"
 
+	elif [ "$verbose_output" = "2" ] ;then
+		# Alternative per-file status-output arrangements can be placed here. A number of vars are set during operations based on the success or failure
+		# of the the first sox run, the second sox run if the first's dither had clipped samples, and metaflac when enabled.
+		printf '\n\n  secondary output style not implemented, you should set verbose_output to "1" (or "0")'
 
 	else # (( ! verbose_output )) / only emit details about imperfect results
 
@@ -841,31 +852,52 @@ _execute() {
 	# 91      91      sox2 succeeds, no dither, metaflac fails
 	# ?2      ?2      yada yada yada, metaflac disabled
 
+	# set _execute return code, and tally non-specific failures for single-thread (and hopefully future bash-multiprocess)
 	case $status in # rename $status -> $return_code and then just re-set it to "0" on success, or leave it as-is
 		9[02] | 8[02] | 7[02] )
 			return_code="0"
 			;;
 		1 | 2 | 91 | 81 | 71 | 30 | 31 | ?2 )
+			imperfect_indexes+=( "$index" ) # still not valid under gnuparallel, but should help bring the single-thread non-verbose status back in working order
 			return_code="$status"
 			;;
 		# ok to go overboard doling out the return codes here/earlier, stop thinking about this until later
 		# as long as [ success = 0 && non-success != 0 ] then this is fine for now!
 	esac
 
-	[ "$return_code" = "0" ] && {
+	# (for single-thread, and hopefully future bash-multiprocess) tally specific failures
+	# ... ideally outside _execute
+	[[ $status == [12] ]] && sox_failures+=( "$index" )
+	[[ $status == [3789]1 ]] && metaflac_failures+=( "$index" )
+	[[ $status == 3[012] ]] && sox2_clipped_dithers+=( "$index" )
+
+	[[ $return_code = "0" ]] && {
 		# AT YOUR OWN RISK, especially if you didn't get this from the 'main' branch,
 		# do the extra stuff you want to do when everything went well, eg:
 		# rm -- "${absolute_flac_names[$index]}"
 		# mkspectrograms.sh -- "${target_flacs[$index]}"
 		# run_program -on "${target_flacs[$index]}" > "${target_folders[$index]}"/program_log.txt 2>&1
 		# what have you
-		true
+		true # this "true" is only required when no other commands are added/uncommented here
 	}
 
 	return "$return_code"
 
 } # end of _execute
 
+# _fail_logger() {
+# 	if ln -s -t /tmp downsampler-lockfile >/dev/null 2>&1 ;then
+
+# 		# ctrl+c unlinks $lockfile (?) -- from a function called in another function, run probably with gnu parallel?
+# 		trap 'unlink "${torrents}/${lockfile}"' INT   # have to test this trap, function run in the function run in parallel...
+
+# 		printf '[%s] %s\n' "$1" "$2" >> "$log_file"
+# 		unlink /tmp/downsampler-lockfile
+# 		return 0
+# 	else
+# 		return 1
+# 	fi
+# }
 
 # use the _execute function, with threads, or without, to output ${target_flacs[@]}
 if [[ $threads_off == "1" ]] ;then
@@ -880,9 +912,6 @@ if [[ $threads_off == "1" ]] ;then
 		# esac
 	done
 
-	# test/debug
-	printf '\n\n\n%sIn single-threaded mode the following final status messages are not currently valid,\nhowever any imperfect results should already have been detailed above.%s' "$orange" "$default"
-
 	if [[ -z ${imperfect_indexes[*]} ]] ;then # appease shellcheck/SC2199 by using [*] instead of [@]
 		# looks a little weird with 2 prepended newlines when there's no error output in non-verbose mode
 		printf -- '\n\n\n%sDone%s. Converted %s target(s) with no apparent failures.\n\n' "$green" "$default" "${#target_flacs[@]}"
@@ -890,7 +919,7 @@ if [[ $threads_off == "1" ]] ;then
 		#_message -N "Converted ${#target_flacs[@]} target(s) with no apparent failures."
 
 	elif [[ ${#imperfect_indexes[@]} -eq ${#target_flacs[@]} ]] ;then
-		printf -- '\n\n\n%sDone%s. %sTotal Failure:%s Every target failed at least 1 of their tasks.\n\n' "${red}" "${default}" "${red}" "${default}"
+		printf -- '\n\n\n%sDone%s. %sTotal Failure:%s Every target failed at least 1 of their tasks.\n\n' "${red}" "${default}" "${bold}" "${default}"
 		#_message "${red}Done.${default} "
 		#_error "TOTAL FAILURE: EVERY TARGET failed at least 1 of their tasks!"
 
@@ -901,16 +930,18 @@ if [[ $threads_off == "1" ]] ;then
 		#_error "PARTIAL FAILURE: At least 1 task failed for ${#imperfect_indexes[@]} (out of ${#target_flacs[@]}) target(s)!"
 	fi
 
-	# if [[ $verbose_output != "1" && -n ${imperfect_indexes[*]} ]] ;then # this non-verbose mode failed file listing has been tacked on at the last minute... works??
-	# 	[[ -n ${sox_failures[*]} ]]      && { _message -n "SoX failures:"      ;for index in "${!sox_failures[@]}"      ;do printf '  %s\n' "${target_flacs[$index]}" ;done ; }
-	# 	[[ -n ${metaflac_failures[*]} ]] && { _message -n "metaflac failures:" ;for index in "${!metaflac_failures[@]}" ;do printf '  %s\n' "${target_flacs[$index]}" ;done ; }
-	# fi
+	if [[ $verbose_output != "1" ]] && (( ${#imperfect_indexes[@]} )) ;then
+		(( ${#sox_failures[@]} ))         && { _message -n "SoX failures:"         ;for index in "${sox_failures[@]}"         ;do printf '  %s\n' "${target_flacs[$index]}" ;printf '\n' ;done ; } # elements are indexes
+	    (( ${#metaflac_failures[@]} ))    && { _message -n "metaflac failures:"    ;for index in "${metaflac_failures[@]}"    ;do printf '  %s\n' "${target_flacs[$index]}" ;printf '\n' ;done ; }
+		(( ${#sox2_clipped_dithers[@]} )) && { _message -n "dither clipped twice:" ;for index in "${sox2_clipped_dithers[@]}" ;do printf '  %s\n' "${target_flacs[$index]}" ;printf '\n' ;done ; }
+	fi
+
+# elif ((use_bash_multiprocess)) ;then
+# 	true
+
 else
 	printf -- 'Converting %s target(s) with SoX and env_parallel...' "${#target_flacs[@]}"
 	#_message -N "Converting ${#target_flacs[@]} target(s) with SoX and env_parallel..."
-
-	# test/debug
-	printf -- '\n\nthere may still be newly-needed (or newly-not-needed) --env options required for env_parallel to run _execute...'
 
 	source "$env_parallel_bash"
 
